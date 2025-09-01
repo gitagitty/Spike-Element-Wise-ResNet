@@ -3,7 +3,7 @@ import torch.nn as nn
 from spikingjelly.clock_driven import layer
 from spikingjelly.cext import neuron as cext_neuron
 
-__all__ = ['SpikingResNet', 'spiking_resnet18', 'spiking_resnet34', 'spiking_resnet50', 'spiking_resnet101',
+__all__ = ['SpikingResNet', 'spiking_resnet18', 'spiking_resnet19', 'spiking_resnet34', 'spiking_resnet50', 'spiking_resnet101',
            'spiking_resnet152']
 
 
@@ -121,7 +121,7 @@ def zero_init_blocks(net: nn.Module):
 
 class SpikingResNet(nn.Module):
 
-    def __init__(self, block, layers, num_classes=1000, zero_init_residual=False,
+    def __init__(self, block, layers, num_classes=100, zero_init_residual=False,
                  groups=1, width_per_group=64, replace_stride_with_dilation=None,
                  norm_layer=None, T=4):
         super(SpikingResNet, self).__init__()
@@ -221,6 +221,9 @@ def _spiking_resnet(block, layers, **kwargs):
 def spiking_resnet18(**kwargs):
 
     return _spiking_resnet(BasicBlock, [2, 2, 2, 2], **kwargs)
+
+def spiking_resnet19(**kwargs):
+    return _spiking_resnet(BasicBlock, [3,3,2], **kwargs)
 
 
 def spiking_resnet34(**kwargs):

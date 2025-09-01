@@ -117,63 +117,47 @@ def _get_cache_path(filepath):
     cache_path = os.path.expanduser(cache_path)
     return cache_path
 
-def load_data(traindir, valdir, cache_dataset, distributed):
-    # Data loading code
-    print("Loading data")
-    normalize = transforms.Normalize(mean=[0.485, 0.456, 0.406],
-                                     std=[0.229, 0.224, 0.225])
-
+def load_data():
+    print("Loading CIFAR-100 data")
+    
+    # CIFAR-100 专用的归一化参数
+    normalize = transforms.Normalize(mean=[0.5071, 0.4867, 0.4408],
+                                     std=[0.2675, 0.2565, 0.2761])
+    
+    train_transform = transforms.Compose([
+        transforms.RandomCrop(32, padding=4),
+        transforms.RandomHorizontalFlip(),
+        transforms.ToTensor(),
+        normalize,
+    ])
+    
+    test_transform = transforms.Compose([
+        transforms.ToTensor(),
+        normalize,
+    ])
+    
     print("Loading training data")
     st = time.time()
-    cache_path = _get_cache_path(traindir)
-    if cache_dataset and os.path.exists(cache_path):
-        # Attention, as the transforms are also cached!
-        print("Loading dataset_train from {}".format(cache_path))
-        dataset, _ = torch.load(cache_path)
-    else:
-        dataset = torchvision.datasets.ImageFolder(
-            traindir,
-            transforms.Compose([
-                transforms.RandomResizedCrop(224),
-                transforms.RandomHorizontalFlip(),
-                transforms.ToTensor(),
-                normalize,
-            ]))
-        if cache_dataset:
-            print("Saving dataset_train to {}".format(cache_path))
-            utils.mkdir(os.path.dirname(cache_path))
-            utils.save_on_master((dataset, traindir), cache_path)
-    print("Took", time.time() - st)
-
+    
+    # 使用 torchvision 内置的 CIFAR-100 数据集
+    dataset_train = torchvision.datasets.CIFAR100(
+        root=args.data_path, 
+        train=True, 
+        download=True,
+        transform=train_transform
+    )
+    
     print("Loading validation data")
-    cache_path = _get_cache_path(valdir)
-    if cache_dataset and os.path.exists(cache_path):
-        # Attention, as the transforms are also cached!
-        print("Loading dataset_test from {}".format(cache_path))
-        dataset_test, _ = torch.load(cache_path)
-    else:
-        dataset_test = torchvision.datasets.ImageFolder(
-            valdir,
-            transforms.Compose([
-                transforms.Resize(256),
-                transforms.CenterCrop(224),
-                transforms.ToTensor(),
-                normalize,
-            ]))
-        if cache_dataset:
-            print("Saving dataset_test to {}".format(cache_path))
-            utils.mkdir(os.path.dirname(cache_path))
-            utils.save_on_master((dataset_test, valdir), cache_path)
-
+    dataset_test = torchvision.datasets.CIFAR100(
+        root=args.data_path,
+        train=False,
+        download=True,
+        transform=test_transform
+    )
+    
+    print("Took", time.time() - st)
     print("Creating data loaders")
-    if distributed:
-        train_sampler = torch.utils.data.distributed.DistributedSampler(dataset)
-        test_sampler = torch.utils.data.distributed.DistributedSampler(dataset_test)
-    else:
-        train_sampler = torch.utils.data.RandomSampler(dataset)
-        test_sampler = torch.utils.data.SequentialSampler(dataset_test)
-
-    return dataset, dataset_test, train_sampler, test_sampler
+    return dataset_train, dataset_test
 
 
 def main(args):
@@ -189,22 +173,22 @@ def main(args):
 
     utils.init_distributed_mode(args)
     print(args)
-    output_dir = os.path.join(args.output_dir, f'{args.model}_b{args.batch_size}_lr{args.lr}_T{args.T}')
+    output_dir = os.path.join(args.output_dir, datetime.datetime.now().strftime("%m%d_%H%M%S"))
 
-    if args.zero_init_residual:
-        output_dir += '_zi'
-    if args.weight_decay:
-        output_dir += f'_wd{args.weight_decay}'
+    # if args.zero_init_residual:
+    #     output_dir += '_zi'
+    # if args.weight_decay:
+    #     output_dir += f'_wd{args.weight_decay}'
 
-    output_dir += f'_coslr{args.cos_lr_T}'
+    # output_dir += f'_coslr{args.cos_lr_T}'
 
-    if args.adam:
-        output_dir += '_adam'
-    else:
-        output_dir += '_sgd'
+    # if args.adam:
+    #     output_dir += '_adam'
+    # else:
+    #     output_dir += '_sgd'
 
-    if args.connect_f:
-        output_dir += f'_cnf_{args.connect_f}'
+    # if args.connect_f:
+    #     output_dir += f'_cnf_{args.connect_f}'
 
     if output_dir:
         utils.mkdir(output_dir)
@@ -214,17 +198,16 @@ def main(args):
 
     train_dir = os.path.join(args.data_path, 'train')
     val_dir = os.path.join(args.data_path, 'val')
-    dataset_train, dataset_test, train_sampler, test_sampler = load_data(train_dir, val_dir,
-                                                                   args.cache_dataset, args.distributed)
+    dataset_train, dataset_test = load_data()
     print(f'dataset_train:{dataset_train.__len__()}, dataset_test:{dataset_test.__len__()}')
 
     data_loader = torch.utils.data.DataLoader(
         dataset_train, batch_size=args.batch_size,
-        sampler=train_sampler, num_workers=args.workers, pin_memory=True)
+        shuffle=True, num_workers=args.workers, pin_memory=True)
 
     data_loader_test = torch.utils.data.DataLoader(
         dataset_test, batch_size=args.batch_size,
-        sampler=test_sampler, num_workers=args.workers, pin_memory=True)
+        shuffle=False, num_workers=args.workers, pin_memory=True)
 
     print("Creating model")
 
@@ -294,8 +277,6 @@ def main(args):
     start_time = time.time()
     for epoch in range(args.start_epoch, args.epochs):
         save_max = False
-        if args.distributed:
-            train_sampler.set_epoch(epoch)
         train_loss, train_acc1, train_acc5 = train_one_epoch(model, criterion, optimizer, data_loader, device, epoch, args.print_freq, scaler)
         if utils.is_main_process():
             train_tb_writer.add_scalar('train_loss', train_loss, epoch)
@@ -365,7 +346,7 @@ def main(args):
 def parse_args():
     parser = argparse.ArgumentParser(description='PyTorch Classification Training')
 
-    parser.add_argument('--data-path', default='/home/wfang/datasets/ImageNet', help='dataset')
+    parser.add_argument('--data-path', default='~/datasets/cifar100', help='dataset')
 
     parser.add_argument('--model', default='resnet18', help='model')
     parser.add_argument('--device', default='cuda', help='device')
